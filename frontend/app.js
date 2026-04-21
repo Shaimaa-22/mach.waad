@@ -1,4 +1,4 @@
-const API = "https://YOUR-BACKEND.onrender.com";
+const API = "https://mach-backend-wsbv.onrender.com";
 
 async function register() {
   const body = {
