@@ -1,0 +1,1 @@
+Open the Canvas in ChatGPT for the full project source code. This zip contains starter structure.
