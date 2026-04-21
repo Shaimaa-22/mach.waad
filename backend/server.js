@@ -13,7 +13,7 @@ const pool = new Pool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : false
+  ssl: { rejectUnauthorized: false }
 });
 
 const SYSTEM_DOCTOR = {
@@ -65,14 +65,14 @@ async function initDb() {
       age INTEGER NOT NULL,
       normal_min DOUBLE PRECISION NOT NULL DEFAULT 70,
       normal_max DOUBLE PRECISION NOT NULL DEFAULT 140,
-      doctor_id INTEGER NOT NULL REFERENCES doctors(id) ON DELETE RESTRICT ON UPDATE CASCADE
+      doctor_id INTEGER NOT NULL REFERENCES doctors(id)
     );
   `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS readings (
       id SERIAL PRIMARY KEY,
-      patient_id INTEGER NOT NULL REFERENCES patients(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+      patient_id INTEGER NOT NULL REFERENCES patients(id),
       glucose_value DOUBLE PRECISION NOT NULL,
       status TEXT NOT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -81,9 +81,7 @@ async function initDb() {
 }
 
 async function getOrCreateDoctor() {
-  const existing = await pool.query(
-    `SELECT * FROM doctors ORDER BY id ASC LIMIT 1`
-  );
+  const existing = await pool.query(`SELECT * FROM doctors LIMIT 1`);
 
   if (existing.rows.length > 0) {
     return existing.rows[0];
@@ -91,9 +89,9 @@ async function getOrCreateDoctor() {
 
   const created = await pool.query(
     `
-      INSERT INTO doctors (full_name, email, whatsapp_number)
-      VALUES ($1, $2, $3)
-      RETURNING *
+    INSERT INTO doctors (full_name, email, whatsapp_number)
+    VALUES ($1, $2, $3)
+    RETURNING *
     `,
     [SYSTEM_DOCTOR.name, SYSTEM_DOCTOR.email, SYSTEM_DOCTOR.whatsapp]
   );
@@ -105,17 +103,13 @@ app.post("/api/register-patient", async (req, res) => {
   try {
     const { patientName, age } = req.body;
 
-    if (!patientName || !age) {
-      return res.status(400).json({ error: "patientName and age are required" });
-    }
-
     const doctor = await getOrCreateDoctor();
 
     const result = await pool.query(
       `
-        INSERT INTO patients (full_name, age, normal_min, normal_max, doctor_id)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id
+      INSERT INTO patients (full_name, age, normal_min, normal_max, doctor_id)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id
       `,
       [patientName, Number(age), NORMAL_RANGE.min, NORMAL_RANGE.max, doctor.id]
     );
@@ -124,9 +118,9 @@ app.post("/api/register-patient", async (req, res) => {
       success: true,
       patientId: result.rows[0].id
     });
-  } catch (error) {
-    console.error("register-patient error:", error);
-    res.status(500).json({ error: "Internal server error" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
@@ -136,17 +130,10 @@ app.post("/api/readings", async (req, res) => {
 
     const patientResult = await pool.query(
       `
-        SELECT
-          p.id,
-          p.full_name,
-          p.age,
-          p.normal_min,
-          p.normal_max,
-          d.email AS doctor_email,
-          d.whatsapp_number AS doctor_whatsapp
-        FROM patients p
-        JOIN doctors d ON p.doctor_id = d.id
-        WHERE p.id = $1
+      SELECT p.*, d.email AS doctor_email, d.whatsapp_number AS doctor_whatsapp
+      FROM patients p
+      JOIN doctors d ON p.doctor_id = d.id
+      WHERE p.id = $1
       `,
       [Number(patientId)]
     );
@@ -163,14 +150,13 @@ app.post("/api/readings", async (req, res) => {
 
     const readingResult = await pool.query(
       `
-        INSERT INTO readings (patient_id, glucose_value, status)
-        VALUES ($1, $2, $3)
-        RETURNING id, patient_id, glucose_value, status, created_at
+      INSERT INTO readings (patient_id, glucose_value, status)
+      VALUES ($1, $2, $3)
+      RETURNING *
       `,
       [patient.id, Number(value), status]
     );
 
-    const reading = readingResult.rows[0];
     let whatsappLink = null;
 
     if (status === "HIGH") {
@@ -193,18 +179,12 @@ app.post("/api/readings", async (req, res) => {
 
     res.json({
       success: true,
-      reading: {
-        id: reading.id,
-        patientId: reading.patient_id,
-        glucoseValue: reading.glucose_value,
-        status: reading.status,
-        createdAt: reading.created_at
-      },
+      reading: readingResult.rows[0],
       whatsappLink
     });
-  } catch (error) {
-    console.error("readings error:", error);
-    res.status(500).json({ error: "Internal server error" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
@@ -212,43 +192,24 @@ app.get("/api/patients/:id/latest", async (req, res) => {
   try {
     const result = await pool.query(
       `
-        SELECT
-          id,
-          patient_id AS "patientId",
-          glucose_value AS "glucoseValue",
-          status,
-          created_at AS "createdAt"
-        FROM readings
-        WHERE patient_id = $1
-        ORDER BY created_at DESC
-        LIMIT 1
+      SELECT *
+      FROM readings
+      WHERE patient_id = $1
+      ORDER BY created_at DESC
+      LIMIT 1
       `,
       [Number(req.params.id)]
     );
 
     res.json(result.rows[0] || null);
-  } catch (error) {
-    console.error("latest reading error:", error);
-    res.status(500).json({ error: "Internal server error" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-app.get("/api/health", async (_req, res) => {
-  try {
-    await pool.query("SELECT 1");
-    res.json({ ok: true });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-initDb()
-  .then(() => {
-    app.listen(process.env.PORT || 10000, () => {
-      console.log(`Running on ${process.env.PORT || 10000}`);
-    });
-  })
-  .catch((error) => {
-    console.error("Database init failed:", error);
-    process.exit(1);
+initDb().then(() => {
+  app.listen(process.env.PORT || 10000, () => {
+    console.log(`Running on ${process.env.PORT || 10000}`);
   });
+});
