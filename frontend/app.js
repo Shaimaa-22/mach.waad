@@ -1,10 +1,12 @@
+const API = "https://YOUR-BACKEND.onrender.com";
+
 async function register() {
   const body = {
     patientName: document.getElementById("patientName").value,
     age: document.getElementById("age").value
   };
 
-  const res = await fetch("/api/register-patient", {
+  const res = await fetch(`${API}/api/register-patient`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
@@ -17,7 +19,7 @@ async function register() {
 
 async function loadLatest() {
   const patientId = localStorage.getItem("patientId");
-  const res = await fetch(`/api/patients/${patientId}/latest`);
+  const res = await fetch(`${API}/api/patients/${patientId}/latest`);
   const data = await res.json();
 
   const valueEl = document.getElementById("value");
