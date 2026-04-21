@@ -11,7 +11,7 @@ const db = new sqlite3.Database(dbPath);
 
 const SYSTEM_DOCTOR = {
   name: "د. أحمد",
-  email: "shaimaadwedar03@gmail.com",
+  email: "shaimaadwedar03@gmail.com ,ahmadradialbatal@gmail.com , waaddwedar20@gmail.com",
   whatsapp: "9720594608763"
 };
 
