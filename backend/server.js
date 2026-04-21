@@ -2,19 +2,12 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const nodemailer = require("nodemailer");
-const { Pool } = require("pg");
+const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 
 const app = express();
-
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT || 5432),
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  ssl: { rejectUnauthorized: false }
-});
+const dbPath = path.join(__dirname, "glucose.db");
+const db = new sqlite3.Database(dbPath);
 
 const SYSTEM_DOCTOR = {
   name: "د. أحمد",
@@ -39,8 +32,8 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-async function sendEmail(to, subject, text) {
-  await transporter.sendMail({
+function sendEmail(to, subject, text) {
+  return transporter.sendMail({
     from: process.env.EMAIL_USER,
     to,
     subject,
@@ -48,79 +41,111 @@ async function sendEmail(to, subject, text) {
   });
 }
 
-async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS doctors (
-      id SERIAL PRIMARY KEY,
-      full_name TEXT NOT NULL,
-      email TEXT NOT NULL,
-      whatsapp_number TEXT NOT NULL
-    );
-  `);
+function run(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve(this);
+    });
+  });
+}
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS patients (
-      id SERIAL PRIMARY KEY,
-      full_name TEXT NOT NULL,
-      age INTEGER NOT NULL,
-      normal_min DOUBLE PRECISION NOT NULL DEFAULT 70,
-      normal_max DOUBLE PRECISION NOT NULL DEFAULT 140,
-      doctor_id INTEGER NOT NULL REFERENCES doctors(id)
-    );
-  `);
+function get(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS readings (
-      id SERIAL PRIMARY KEY,
-      patient_id INTEGER NOT NULL REFERENCES patients(id),
-      glucose_value DOUBLE PRECISION NOT NULL,
-      status TEXT NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
+function initDb() {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS doctors (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          full_name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          whatsapp_number TEXT NOT NULL
+        )
+      `);
+
+      db.run(`
+        CREATE TABLE IF NOT EXISTS patients (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          full_name TEXT NOT NULL,
+          age INTEGER NOT NULL,
+          normal_min REAL NOT NULL DEFAULT 70,
+          normal_max REAL NOT NULL DEFAULT 140,
+          doctor_id INTEGER NOT NULL,
+          FOREIGN KEY (doctor_id) REFERENCES doctors(id)
+        )
+      `);
+
+      db.run(`
+        CREATE TABLE IF NOT EXISTS readings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          patient_id INTEGER NOT NULL,
+          glucose_value REAL NOT NULL,
+          status TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (patient_id) REFERENCES patients(id)
+        )
+      `, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  });
 }
 
 async function getOrCreateDoctor() {
-  const existing = await pool.query(`SELECT * FROM doctors LIMIT 1`);
+  const existing = await get(`SELECT * FROM doctors LIMIT 1`);
 
-  if (existing.rows.length > 0) {
-    return existing.rows[0];
-  }
+  if (existing) return existing;
 
-  const created = await pool.query(
+  const result = await run(
     `
-    INSERT INTO doctors (full_name, email, whatsapp_number)
-    VALUES ($1, $2, $3)
-    RETURNING *
+      INSERT INTO doctors (full_name, email, whatsapp_number)
+      VALUES (?, ?, ?)
     `,
     [SYSTEM_DOCTOR.name, SYSTEM_DOCTOR.email, SYSTEM_DOCTOR.whatsapp]
   );
 
-  return created.rows[0];
+  return {
+    id: result.lastID,
+    full_name: SYSTEM_DOCTOR.name,
+    email: SYSTEM_DOCTOR.email,
+    whatsapp_number: SYSTEM_DOCTOR.whatsapp
+  };
 }
 
 app.post("/api/register-patient", async (req, res) => {
   try {
     const { patientName, age } = req.body;
 
+    if (!patientName || !age) {
+      return res.status(400).json({ error: "patientName and age are required" });
+    }
+
     const doctor = await getOrCreateDoctor();
 
-    const result = await pool.query(
+    const result = await run(
       `
-      INSERT INTO patients (full_name, age, normal_min, normal_max, doctor_id)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id
+        INSERT INTO patients (full_name, age, normal_min, normal_max, doctor_id)
+        VALUES (?, ?, ?, ?, ?)
       `,
       [patientName, Number(age), NORMAL_RANGE.min, NORMAL_RANGE.max, doctor.id]
     );
 
     res.json({
       success: true,
-      patientId: result.rows[0].id
+      patientId: result.lastID
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
+  } catch (error) {
+    console.error("register-patient error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -128,33 +153,51 @@ app.post("/api/readings", async (req, res) => {
   try {
     const { patientId, value } = req.body;
 
-    const patientResult = await pool.query(
+    const patient = await get(
       `
-      SELECT p.*, d.email AS doctor_email, d.whatsapp_number AS doctor_whatsapp
-      FROM patients p
-      JOIN doctors d ON p.doctor_id = d.id
-      WHERE p.id = $1
+        SELECT
+          p.id,
+          p.full_name,
+          p.age,
+          p.normal_min,
+          p.normal_max,
+          d.email AS doctor_email,
+          d.whatsapp_number AS doctor_whatsapp
+        FROM patients p
+        JOIN doctors d ON p.doctor_id = d.id
+        WHERE p.id = ?
       `,
       [Number(patientId)]
     );
 
-    if (patientResult.rows.length === 0) {
+    if (!patient) {
       return res.status(404).json({ error: "Patient not found" });
     }
-
-    const patient = patientResult.rows[0];
 
     let status = "NORMAL";
     if (Number(value) > patient.normal_max) status = "HIGH";
     else if (Number(value) < patient.normal_min) status = "LOW";
 
-    const readingResult = await pool.query(
+    const readingResult = await run(
       `
-      INSERT INTO readings (patient_id, glucose_value, status)
-      VALUES ($1, $2, $3)
-      RETURNING *
+        INSERT INTO readings (patient_id, glucose_value, status)
+        VALUES (?, ?, ?)
       `,
       [patient.id, Number(value), status]
+    );
+
+    const reading = await get(
+      `
+        SELECT
+          id,
+          patient_id AS patientId,
+          glucose_value AS glucoseValue,
+          status,
+          created_at AS createdAt
+        FROM readings
+        WHERE id = ?
+      `,
+      [readingResult.lastID]
     );
 
     let whatsappLink = null;
@@ -179,37 +222,51 @@ app.post("/api/readings", async (req, res) => {
 
     res.json({
       success: true,
-      reading: readingResult.rows[0],
+      reading,
       whatsappLink
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
+  } catch (error) {
+    console.error("readings error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
 app.get("/api/patients/:id/latest", async (req, res) => {
   try {
-    const result = await pool.query(
+    const reading = await get(
       `
-      SELECT *
-      FROM readings
-      WHERE patient_id = $1
-      ORDER BY created_at DESC
-      LIMIT 1
+        SELECT
+          id,
+          patient_id AS patientId,
+          glucose_value AS glucoseValue,
+          status,
+          created_at AS createdAt
+        FROM readings
+        WHERE patient_id = ?
+        ORDER BY datetime(created_at) DESC
+        LIMIT 1
       `,
       [Number(req.params.id)]
     );
 
-    res.json(result.rows[0] || null);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
+    res.json(reading || null);
+  } catch (error) {
+    console.error("latest reading error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
-initDb().then(() => {
-  app.listen(process.env.PORT || 10000, () => {
-    console.log(`Running on ${process.env.PORT || 10000}`);
-  });
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true });
 });
+
+initDb()
+  .then(() => {
+    app.listen(process.env.PORT || 10000, () => {
+      console.log(`Running on ${process.env.PORT || 10000}`);
+    });
+  })
+  .catch((error) => {
+    console.error("Database init failed:", error);
+    process.exit(1);
+  });
