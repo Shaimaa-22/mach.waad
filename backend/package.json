@@ -12,7 +12,7 @@
     "dotenv": "latest",
     "express": "latest",
     "nodemailer": "latest",
-    "pg": "^8.12.0"
+    "sqlite3": "^5.1.7"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
