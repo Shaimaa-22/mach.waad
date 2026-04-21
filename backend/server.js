@@ -20,6 +20,8 @@ const NORMAL_RANGE = {
   max: 140
 };
 
+let activePatientId = null;
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "../frontend")));
@@ -139,6 +141,8 @@ app.post("/api/register-patient", async (req, res) => {
       [patientName, Number(age), NORMAL_RANGE.min, NORMAL_RANGE.max, doctor.id]
     );
 
+    activePatientId = result.lastID;
+
     res.json({
       success: true,
       patientId: result.lastID
@@ -152,6 +156,11 @@ app.post("/api/register-patient", async (req, res) => {
 app.post("/api/readings", async (req, res) => {
   try {
     const { patientId, value } = req.body;
+    const targetPatientId = patientId || activePatientId;
+
+    if (!targetPatientId) {
+      return res.status(400).json({ error: "No active patient selected" });
+    }
 
     const patient = await get(
       `
@@ -167,7 +176,7 @@ app.post("/api/readings", async (req, res) => {
         JOIN doctors d ON p.doctor_id = d.id
         WHERE p.id = ?
       `,
-      [Number(patientId)]
+      [Number(targetPatientId)]
     );
 
     if (!patient) {
@@ -257,7 +266,7 @@ app.get("/api/patients/:id/latest", async (req, res) => {
 });
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, activePatientId });
 });
 
 initDb()
