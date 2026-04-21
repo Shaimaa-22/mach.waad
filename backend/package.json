@@ -7,13 +7,12 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.3",
     "axios": "^1.15.1",
     "cors": "latest",
     "dotenv": "latest",
     "express": "latest",
     "nodemailer": "latest",
-    "prisma": "^6.19.3"
+    "pg": "^8.12.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
