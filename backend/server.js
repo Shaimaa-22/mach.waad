@@ -11,7 +11,7 @@ const db = new sqlite3.Database(dbPath);
 
 const SYSTEM_DOCTOR = {
   name: "د. أحمد",
-  email: "shaimaadwedar03@gmail.com,ahmadradialbatal@gmail.com,waaddwedar20@gmail.com",
+email: "shaimaadwedar03@gmail.com,ahmadradialbatal@gmail.com,waaddwedar20@gmail.com",
   whatsapp: "9720594608763"
 };
 
@@ -211,28 +211,17 @@ app.post("/api/readings", async (req, res) => {
 
     let whatsappLink = null;
 
-    if (status === "HIGH" || status === "LOW") {
-      const msg = status === "HIGH"
-        ? `تنبيه ارتفاع سكر
-
-اسم المريض: ${patient.full_name}
-العمر: ${patient.age}
-القراءة الحالية: ${value} mg/dL
-الطبيعي: ${patient.normal_min}-${patient.normal_max}`
-        : `تنبيه انخفاض سكر
+    if (status === "HIGH") {
+      const msg = `تنبيه ارتفاع سكر
 
 اسم المريض: ${patient.full_name}
 العمر: ${patient.age}
 القراءة الحالية: ${value} mg/dL
 الطبيعي: ${patient.normal_min}-${patient.normal_max}`;
 
-      const subject = status === "HIGH"
-        ? `تنبيه ارتفاع سكر - ${patient.full_name}`
-        : `تنبيه انخفاض سكر - ${patient.full_name}`;
-
       await sendEmail(
         patient.doctor_email,
-        subject,
+        `تنبيه سكر - ${patient.full_name}`,
         msg
       );
 
@@ -289,4 +278,4 @@ initDb()
   .catch((error) => {
     console.error("Database init failed:", error);
     process.exit(1);
-  });
+  }); 
